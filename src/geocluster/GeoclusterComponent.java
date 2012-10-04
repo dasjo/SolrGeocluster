@@ -18,7 +18,9 @@ package geocluster;
 
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.Map;
+import java.util.Map.Entry;
 
 import org.apache.solr.common.SolrDocument;
 import org.apache.solr.common.params.SolrParams;
@@ -63,6 +65,23 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
     }
     DocListAndSet results = rb.getResults();
     Map<SolrDocument,Integer> docIds = new HashMap<SolrDocument, Integer>(results.docList.size());
+    
+    String field = "f_sm_field_place:geohash_geocluster_index";
+
+    NamedList values = rb.rsp.getValues();
+    NamedList facetCounts = (NamedList)values.get("facet_counts");
+    NamedList allFieldCounts = facetCounts != null ? (NamedList)facetCounts.get("facet_fields") : null;
+    NamedList<Integer> fieldCounts = allFieldCounts != null ? (NamedList<Integer>)allFieldCounts.get(field) : null;
+    
+    if (fieldCounts != null) {
+      Iterator<Map.Entry<String,Integer>> iterator = fieldCounts.iterator();
+      while (iterator.hasNext()) {
+        Entry<String, Integer> entry = iterator.next();
+        String prefix = entry.getKey();
+        Integer count = entry.getValue();
+      }
+    }
+    
     // Object clusters = engine.cluster(rb.getQuery(), solrDocList, docIds, rb.req);
     // rb.rsp.add("clusters", clusters);
   }
