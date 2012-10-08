@@ -58,12 +58,17 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
   public static final String COMPONENT_NAME = "geocluster";
   private NamedList initParams;
   
+  // TODO: make this a parameter
+  protected String groupField = "f_ss_field_place:geohash_geocluster_index_3";
+  
   @Override
   public void prepare(ResponseBuilder rb) throws IOException {
     SolrParams params = rb.req.getParams();
     if (params.getBool(COMPONENT_NAME, false)) {
+      
+      // We rely on a docList to access data to cluster upon.
       // TODO: this just doesn't work
-      rb.setNeedDocList( true );
+      // rb.setNeedDocList( true );
       // Alternative workaround, see getDocList in Grouping.java
       rb.setFieldFlags(SolrIndexSearcher.GET_DOCLIST);
     }
@@ -76,15 +81,18 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
       return;
     }
     DocListAndSet results = rb.getResults();
-    Map<SolrDocument,Integer> docIds = new HashMap<SolrDocument, Integer>(results.docList.size());
-    SolrDocumentList solrDocList = getSolrDocumentList(results.docList, rb.req, docIds);
+    Map<SolrDocument,Integer> docIdsReverse = new HashMap<SolrDocument, Integer>(results.docList.size());
+    SolrDocumentList solrDocList = getSolrDocumentList(results.docList, rb.req, docIdsReverse);
     
-    String field = "f_ss_field_place:geohash_geocluster_index_3";
+    Map<Integer, SolrDocument> docIds = new HashMap<Integer, SolrDocument>(results.docList.size());
     
-
+    for (Entry<SolrDocument, Integer> docId : docIdsReverse.entrySet()) {
+      docIds.put(docId.getValue(), docId.getKey());
+    }
+    
     NamedList values = rb.rsp.getValues();
     NamedList grouped = (NamedList)values.get("grouped");
-    NamedList groupedValue = (NamedList)grouped.get(field);
+    NamedList groupedValue = (NamedList)grouped.get(groupField);
     ArrayList<NamedList> groups = (ArrayList)groupedValue.get("groups");
 
     if (groups != null) {
@@ -96,7 +104,7 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
         DocIterator iterator = docList.iterator();
         while (iterator.hasNext()) {
           Integer docId = iterator.next();
-          SolrDocument doc = solrDocList.get(docId);
+          SolrDocument doc = docIds.get(docId);
           String geohash = (String)doc.getFieldValue("ss_field_place:geohash");
           String latlon = (String)doc.getFieldValue("t_field_place:latlon");
           String id = (String)doc.getFieldValue("ss_search_api_id");
@@ -106,24 +114,6 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
         
       }
     }
-    
-    /*
-    String field = "f_sm_field_place:geohash_geocluster_index";
-
-    NamedList values = rb.rsp.getValues();
-    NamedList facetCounts = (NamedList)values.get("facet_counts");
-    NamedList allFieldCounts = facetCounts != null ? (NamedList)facetCounts.get("facet_fields") : null;
-    NamedList<Integer> fieldCounts = allFieldCounts != null ? (NamedList<Integer>)allFieldCounts.get(field) : null;
-    
-    if (fieldCounts != null) {
-      Iterator<Map.Entry<String,Integer>> iterator = fieldCounts.iterator();
-      while (iterator.hasNext()) {
-        Entry<String, Integer> entry = iterator.next();
-        String prefix = entry.getKey();
-        Integer count = entry.getValue();
-      }
-    }
-    */
     
     // Object clusters = engine.cluster(rb.getQuery(), solrDocList, docIds, rb.req);
     // rb.rsp.add("clusters", clusters);
