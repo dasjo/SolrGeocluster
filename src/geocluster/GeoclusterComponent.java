@@ -48,6 +48,18 @@ import ch.hsr.geohash.GeoHash;
 
 /**
  * Provide a plugin for geo-clustering results.  
+ * 
+ * example query: http://localhost:8123/solr/geocluster?facet.field=f_ss_field_place:geohash_geocluster_index_3&facet.prefix=3_&facet=true&q=*:*&group=true&group.field=f_ss_field_place:geohash_geocluster_index_3&group.limit=5&fq=index_id:geocluster_index
+ * 
+ * http://localhost:8123/solr/geocluster?
+ * q=*:*
+ * fq=index_id:geocluster_index
+ * facet.field=f_ss_field_place:geohash_geocluster_index_3
+ * group=true
+ * group.limit=5
+ * group.field=f_ss_field_place:geohash_geocluster_index_3
+ * facet=true
+ * facet.prefix=3_
  */
 public class GeoclusterComponent extends SearchComponent implements SolrCoreAware {
   private transient static Logger log = LoggerFactory.getLogger(GeoclusterComponent.class);
@@ -132,27 +144,30 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
           log.info("Doc: " + id + ", geohash: " + geohash + ", latlon: " + latlon); 
         }
         
-        GeoHash hash = GeoHash.fromGeohashString(geohashPrefix);
-        GeoHash[] neighbors = hash.getAdjacent();
-        for (GeoHash neighbor : neighbors) {
-          String neighborHashString = neighbor.toString();
-          if (clusterMap.containsKey(neighborHashString)) {
-            SolrDocument otherCluster = clusterMap.get(neighborHashString);
-            if (shouldCluster(cluster, otherCluster)) {
-              mergeCluster(cluster, otherCluster);
+        if (geohashPrefix != null) {
+          GeoHash hash = GeoHash.fromGeohashString(geohashPrefix);
+          GeoHash[] neighbors = hash.getAdjacent();
+          for (GeoHash neighbor : neighbors) {
+            String neighborHashString = neighbor.toString();
+            if (clusterMap.containsKey(neighborHashString)) {
+              SolrDocument otherCluster = clusterMap.get(neighborHashString);
+              if (shouldCluster(cluster, otherCluster)) {
+                mergeCluster(cluster, otherCluster);
+              }
             }
           }
         }
+       
       }
       
-      foreach(NamedList test : clusterMap.entrySet()) {
-        
+      for (Entry<String, SolrDocument> cluster : clusterMap.entrySet()) {
+        log.info("Cluster: key: " + cluster.getKey() + ", value: " );
       }
     }
-    
+    /*
     for (NamedList namedList : clusterMap.) {
       
-    }
+    }*/
     
     // Object clusters = engine.cluster(rb.getQuery(), solrDocList, docIds, rb.req);
     // rb.rsp.add("clusters", clusters);
