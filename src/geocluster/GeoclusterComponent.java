@@ -159,72 +159,16 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
     ArrayList<NamedList> groups = (ArrayList)groupedValue.get("groups");
     
     // Iterate over grouped values and perform clustering algorithm.
-
     if (groups != null) {
-      // Temp. store for clusters.
-      int size = results.docList.size(); // will be less, but no way to calc in advance?
-      Map<String, SolrDocument> clusterMap = new HashMap<String, SolrDocument>(size);
-
+      
       // Add all points within the core geohash to a cluster.
-      for (NamedList group : groups) {
-        String geohashPrefix = (String)group.get("groupValue");
-        log.info("Prefix: " + geohashPrefix);
-        
-        SolrDocument cluster = null;
-        DocSlice docList = (DocSlice)group.get("doclist");
-        DocIterator iterator = docList.iterator();
-        while (iterator.hasNext()) {
-          Integer docId = iterator.next();
-          SolrDocument doc = docIds.get(docId);
-          
-          String geohash = (String)doc.getFieldValue(this.geohashField);
-          String latlon = (String)doc.getFieldValue(this.latlonField);
-          String id = (String)doc.getFieldValue(this.idField);
-          
-          // Init cluster
-          if (cluster == null) {
-            cluster = initCluster(doc, docId, clusterMap, geohashPrefix, docList);
-            log.info("Parent: " + id + ", geohash: " + geohash + ", latlon: " + latlon); 
-          }
-          else {
-            addCluster(cluster, doc, docId);
-            log.info("Child : " + id + ", geohash: " + geohash + ", latlon: " + latlon); 
-          }
-        }
-        
-        updateCluster(cluster);
-      }
+      Map<String, SolrDocument> clusterMap = clusterByHashes(docIds, groups);
       
       // Compare neighbor overlaps.
-      for (Entry<String, SolrDocument> clusterEntry : clusterMap.entrySet()) {
-        String geohashPrefix = clusterEntry.getKey();
-        if (geohashPrefix == null) {
-          continue;
-        }
-        SolrDocument cluster = clusterEntry.getValue();
-        log.info("Cluster: key: " + geohashPrefix + ", value: " );
-        GeoHash hash = GeoHash.fromGeohashString(geohashPrefix);
-        GeoHash[] neighbors = GeohashHelper.getAdjacecentNorthWest(hash);
-        for (GeoHash neighbor : neighbors) {
-          String neighborHashString = neighbor.toBase32();
-          if (clusterMap.containsKey(neighborHashString)) {
-            SolrDocument otherCluster = clusterMap.get(neighborHashString);
-            if (shouldCluster(cluster, otherCluster)) {
-              mergeCluster(cluster, otherCluster);
-              clusterMap.remove(otherCluster);
-            }
-          }
-        }
-      }
+      // neighborCheck(clusterMap);
       
-      for (Entry<String, SolrDocument> clusterEntry : clusterMap.entrySet()) {
-        String geohashPrefix = clusterEntry.getKey();
-        if (geohashPrefix == null) {
-          continue;
-        }
-        SolrDocument cluster = clusterEntry.getValue();
-        this.finishCluster(cluster);
-      }
+      // Finalize cluster data.
+      finalizeClusters(clusterMap);
       
       // Remove normal grouped docs from response.
       rb.rsp.getValues().remove(rb.rsp.getValues().indexOf("grouped", 0));
@@ -235,15 +179,99 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
         
     log.info("clustering finished");
   }
-  
 
-  private void finishCluster(SolrDocument cluster) {
-    // Replace center with latlng string.
-    LatLng center = (LatLng)cluster.get("center");
-    cluster.setField("center", center.getLat() + "," + center.getLng());
-    // Replace docs with ids only.
+  private Map<String, SolrDocument> clusterByHashes(Map<Integer, SolrDocument> docIds, ArrayList<NamedList> groups) {
+    int size = docIds.size(); // will be less, but no way to calc in advance?
+    Map<String, SolrDocument> clusterMap = new HashMap<String, SolrDocument>(size);
+  
+    // Add all points within the core geohash to a cluster.
+    for (NamedList group : groups) {
+      String geohashPrefix = (String)group.get("groupValue");
+      log.info("Prefix: " + geohashPrefix);
+      
+      SolrDocument cluster = null;
+      DocSlice docList = (DocSlice)group.get("doclist");
+      DocIterator iterator = docList.iterator();
+      while (iterator.hasNext()) {
+        Integer docId = iterator.next();
+        SolrDocument doc = docIds.get(docId);
+        
+        String geohash = (String)doc.getFieldValue(this.geohashField);
+        String latlon = (String)doc.getFieldValue(this.latlonField);
+        String id = (String)doc.getFieldValue(this.idField);
+        
+        // Init cluster
+        if (cluster == null) {
+          cluster = initCluster(doc, docId, clusterMap, geohashPrefix, docList);
+          log.info("Parent: " + id + ", geohash: " + geohash + ", latlon: " + latlon); 
+        }
+        else {
+          addCluster(cluster, doc, docId);
+          log.info("Child : " + id + ", geohash: " + geohash + ", latlon: " + latlon); 
+        }
+      }
+      
+      updateCluster(cluster);
+    }
+    return clusterMap;
+  }
+
+  private void neighborCheck(Map<String, SolrDocument> clusterMap) {
+    for (Entry<String, SolrDocument> clusterEntry : clusterMap.entrySet()) {
+      String geohashPrefix = clusterEntry.getKey();
+      if (geohashPrefix == null) {
+        continue;
+      }
+      SolrDocument cluster = clusterEntry.getValue();
+      log.info("Cluster: key: " + geohashPrefix + ", value: " );
+      GeoHash hash = GeoHash.fromGeohashString(geohashPrefix);
+      GeoHash[] neighbors = GeohashHelper.getAdjacecentNorthWest(hash);
+      for (GeoHash neighbor : neighbors) {
+        String neighborHashString = neighbor.toBase32();
+        if (clusterMap.containsKey(neighborHashString)) {
+          SolrDocument otherCluster = clusterMap.get(neighborHashString);
+          if (shouldCluster(cluster, otherCluster)) {
+            mergeCluster(cluster, otherCluster);
+            clusterMap.remove(otherCluster);
+          }
+        }
+      }
+    }
+  }
+
+  private void finalizeClusters(Map<String, SolrDocument> clusterMap) {
+    for (Entry<String, SolrDocument> clusterEntry : clusterMap.entrySet()) {
+      String geohashPrefix = clusterEntry.getKey();
+      if (geohashPrefix == null) {
+        continue;
+      }
+      SolrDocument cluster = clusterEntry.getValue();
+      this.finishCluster(cluster);
+    }
+  }
+
+  /**
+   * Initialize a cluster.
+   */
+  private SolrDocument initCluster(SolrDocument doc, Integer docId, Map<String, SolrDocument> clusterMap, String geohashPrefix, DocSlice docList) {
+    HashMap<Integer, SolrDocument> docs = new HashMap<Integer, SolrDocument>();
+    docs.put(docId, doc);
+    SolrDocument cluster = new SolrDocument();
+    clusterMap.put(geohashPrefix, cluster);
+    cluster.addField("docs", docs);
+    return cluster;
+  }
+
+  /**
+   * Add a document to a cluster.
+   * 
+   * @param clusterMap
+   * @param doc
+   * @param clusterMap
+   */
+  private void addCluster(SolrDocument cluster, SolrDocument doc, Integer docId) {
     HashMap<Integer, SolrDocument> docs = (HashMap<Integer, SolrDocument>)cluster.getFieldValue("docs");
-    cluster.setField("docs", docs.keySet());
+    docs.put(docId, doc);
   }
 
   private void updateCluster(SolrDocument cluster) {
@@ -273,7 +301,15 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
     catch(Exception e) {
     }
   }
- 
+
+  private boolean shouldCluster(SolrDocument cluster, SolrDocument otherCluster) {
+    LatLng latlng = (LatLng)cluster.get("center");
+    LatLng latlngOther = (LatLng)otherCluster.get("center");
+    // Calculate distance in meters.
+    double distance = latlng.arcDistance(latlngOther, DistanceUnits.KILOMETERS);
+    log.info("distance: " + distance);
+    return distance < this.clusterDistance;
+  }
 
   private void mergeCluster(SolrDocument cluster, SolrDocument otherCluster) {
     HashMap<Integer, SolrDocument> otherDocs = (HashMap<Integer, SolrDocument>) otherCluster.getFieldValue("docs");
@@ -287,40 +323,16 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
     cluster.setField("center", newCenter);
   }
 
-  private boolean shouldCluster(SolrDocument cluster, SolrDocument otherCluster) {
-    LatLng latlng = (LatLng)cluster.get("center");
-    LatLng latlngOther = (LatLng)otherCluster.get("center");
-    // Calculate distance in meters.
-    double distance = latlng.arcDistance(latlngOther, DistanceUnits.KILOMETERS);
-    log.info("distance: " + distance);
-    return distance < this.clusterDistance;
-  }
-
-  /**
-   * Add a document to a cluster.
-   * 
-   * @param clusterMap
-   * @param doc
-   * @param clusterMap
-   */
-  private void addCluster(SolrDocument cluster, SolrDocument doc, Integer docId) {
+  private void finishCluster(SolrDocument cluster) {
+    // Replace center with latlng string.
+    LatLng center = (LatLng)cluster.get("center");
+    cluster.setField("center", center.getLat() + "," + center.getLng());
+    // Replace docs with ids only.
     HashMap<Integer, SolrDocument> docs = (HashMap<Integer, SolrDocument>)cluster.getFieldValue("docs");
-    docs.put(docId, doc);
+    cluster.setField("docs", docs.keySet());
+    cluster.addField("count", docs.size());
   }
 
-  /**
-   * Initialize a cluster.
-   */
-  private SolrDocument initCluster(SolrDocument doc, Integer docId, Map<String, SolrDocument> clusterMap, String geohashPrefix, DocSlice docList) {
-    HashMap<Integer, SolrDocument> docs = new HashMap<Integer, SolrDocument>();
-    docs.put(docId, doc);
-    SolrDocument cluster = new SolrDocument();
-    clusterMap.put(geohashPrefix, cluster);
-    cluster.addField("docs", docs);
-    cluster.addField("count", docList.size());
-    return cluster;
-  }
-  
   /**
    * Returns the set of field names to load.
    * Concrete classes can override this method if needed.
