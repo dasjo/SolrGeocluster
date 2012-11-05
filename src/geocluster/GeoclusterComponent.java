@@ -23,6 +23,10 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 
+import org.apache.lucene.spatial.geometry.DistanceUnits;
+import org.apache.lucene.spatial.geometry.FixedLatLng;
+import org.apache.lucene.spatial.geometry.FloatLatLng;
+import org.apache.lucene.spatial.geometry.LatLng;
 import org.apache.solr.common.SolrDocument;
 import org.apache.solr.common.SolrDocumentList;
 import org.apache.solr.common.params.SolrParams;
@@ -47,19 +51,8 @@ import ch.hsr.geohash.GeoHash;
 
 
 /**
- * Provide a plugin for geo-clustering results.  
- * 
- * example query: http://localhost:8123/solr/geocluster?facet.field=f_ss_field_place:geohash_geocluster_index_3&facet.prefix=3_&facet=true&q=*:*&group=true&group.field=f_ss_field_place:geohash_geocluster_index_3&group.limit=5&fq=index_id:geocluster_index
- * 
- * http://localhost:8123/solr/geocluster?
- * q=*:*
- * fq=index_id:geocluster_index
- * facet.field=f_ss_field_place:geohash_geocluster_index_3
- * group=true
- * group.limit=5
- * group.field=f_ss_field_place:geohash_geocluster_index_3
- * facet=true
- * facet.prefix=3_
+ * Provide a plugin for geo-clustering results. 
+ * http://localhost:8123/solr/search?facet=true&group.limit=5&geocluster.clusterField=field_place&geocluster.resolution=1221.96875&geocluster.zoomLevel=7&fl=*&geocluster.idField=ss_search_api_id&group.field=f_ss_field_place:geohash_geocluster_index_3&facet.field=f_ss_field_place:geohash_geocluster_index_3&qt=/geocluster&fq=index_id:geocluster_index&geocluster.clusterDistance=33&geocluster.groupField=f_ss_field_place:geohash_geocluster_index_3&geocluster.geohashField=geohashs_field_place:geohash&qf=t_field_place:latlon^1.0&geocluster.geohashLength=3&rows=1000000&start=0&q=*:*&facet.prefix=3_&geocluster.latlonField=t_field_place:latlon&group=true
  */
 public class GeoclusterComponent extends SearchComponent implements SolrCoreAware {
   private transient static Logger log = LoggerFactory.getLogger(GeoclusterComponent.class);
@@ -71,28 +64,84 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
   public static final String COMPONENT_NAME = "geocluster";
   private NamedList initParams;
   
-  // TODO: make this a parameter
-  protected String groupField = "f_ss_field_place:geohash_geocluster_index_3";
+  protected boolean initialized = false;
+  
+  /**
+   * Cluster distance in pixels.
+   */
+  protected double clusterDistance;
+  
+  /**
+   * Current zoom level for clustering.
+   */
+  protected int zoomLevel;
+  
+  /**
+   * Resolution in meters / pixel based on zoom_level.
+   */
+  protected double resolution;
+  
+  /**
+   * Geohash length for clustering by a specified distance in pixels.
+   */
+  protected int geohashLength;
+  
+  /**
+   * Field used for clustering, for example field_place.
+   */
+  protected String clusterField;
+  
+  /**
+   * Field used for grouping, for example f_ss_field_place:geohash_geocluster_index_3.
+   */
+  protected String groupField;
+  
+  protected String geohashField;
+  
+  protected String idField;
+  
+  protected String latlonField;
   
   @Override
   public void prepare(ResponseBuilder rb) throws IOException {
     SolrParams params = rb.req.getParams();
     if (params.getBool(COMPONENT_NAME, false)) {
-      
       // We rely on a docList to access data to cluster upon.
       // TODO: this just doesn't work
       // rb.setNeedDocList( true );
       // Alternative workaround, see getDocList in Grouping.java
       rb.setFieldFlags(SolrIndexSearcher.GET_DOCLIST);
+      
+      this.initialized = false;
+      try {
+        // Parse geocluster specific query parameters.
+        // These are provided by GeoclusterSearchApiSolrService.
+        this.clusterDistance = Double.parseDouble(params.get("geocluster.clusterDistance"));
+        this.zoomLevel = Integer.parseInt(params.get("geocluster.zoomLevel"));
+        this.resolution = Double.parseDouble(params.get("geocluster.resolution"));
+        this.geohashLength = Integer.parseInt(params.get("geocluster.geohashLength"));
+        this.clusterField = params.get("geocluster.clusterField");
+        this.groupField = params.get("geocluster.groupField");
+        this.geohashField = params.get("geocluster.geohashField");
+        this.idField = params.get("geocluster.idField");
+        this.latlonField = params.get("geocluster.latlonField");
+        this.initialized = true;
+      }
+      catch (Exception e) {
+      }
     }
+    
+    this.clusterDistance = 200;
   }
 
   @Override
   public void process(ResponseBuilder rb) throws IOException {
     SolrParams params = rb.req.getParams();
-    if (!params.getBool(COMPONENT_NAME, false)) {
+    if (!params.getBool(COMPONENT_NAME, false) || !this.initialized) {
+      log.info("skipped clustering");
       return;
     }
+    log.info("started clustering");
     DocListAndSet results = rb.getResults();
     Map<SolrDocument,Integer> docIdsReverse = new HashMap<SolrDocument, Integer>(results.docList.size());
     SolrDocumentList solrDocList = getSolrDocumentList(results.docList, rb.req, docIdsReverse);
@@ -128,9 +177,9 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
           Integer docId = iterator.next();
           SolrDocument doc = docIds.get(docId);
           
-          String geohash = (String)doc.getFieldValue("ss_field_place:geohash");
-          String latlon = (String)doc.getFieldValue("t_field_place:latlon");
-          String id = (String)doc.getFieldValue("ss_search_api_id");
+          String geohash = (String)doc.getFieldValue(this.geohashField);
+          String latlon = (String)doc.getFieldValue(this.latlonField);
+          String id = (String)doc.getFieldValue(this.idField);
           
           // Init cluster
           if (cluster == null) {
@@ -142,45 +191,91 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
             log.info("Child : " + id + ", geohash: " + geohash + ", latlon: " + latlon); 
           }
         }
+        
+        updateCluster(cluster);
       }
       
       // Compare neighbor overlaps.
       for (Entry<String, SolrDocument> clusterEntry : clusterMap.entrySet()) {
         String geohashPrefix = clusterEntry.getKey();
+        if (geohashPrefix == null) {
+          continue;
+        }
         SolrDocument cluster = clusterEntry.getValue();
         log.info("Cluster: key: " + geohashPrefix + ", value: " );
         GeoHash hash = GeoHash.fromGeohashString(geohashPrefix);
-        GeoHash[] neighbors = hash.getAdjacent();
+        GeoHash[] neighbors = GeohashHelper.getAdjacecentNorthWest(hash);
         for (GeoHash neighbor : neighbors) {
-          String neighborHashString = neighbor.toString();
+          String neighborHashString = neighbor.toBase32();
           if (clusterMap.containsKey(neighborHashString)) {
             SolrDocument otherCluster = clusterMap.get(neighborHashString);
             if (shouldCluster(cluster, otherCluster)) {
               mergeCluster(cluster, otherCluster);
+              clusterMap.remove(otherCluster);
             }
           }
         }
       }
-    }
-    /*
-    for (NamedList namedList : clusterMap.) {
       
-    }*/
-    
-    // Object clusters = engine.cluster(rb.getQuery(), solrDocList, docIds, rb.req);
-    // rb.rsp.add("clusters", clusters);
+      
+      // Remove normal grouped docs from response.
+      rb.rsp.getValues().remove(rb.rsp.getValues().indexOf("grouped", 0));
+      
+      // Add our custom cluster map instead.
+      rb.rsp.add("clusters", clusterMap);
+    }
+        
+    log.info("clustering finished");
   }
+
+  private void updateCluster(SolrDocument cluster) {
+    // Calculate center point from all clustered points.
+    HashMap<Integer, SolrDocument> docs = (HashMap<Integer, SolrDocument>)cluster.getFieldValue("docs");
+    Float latMin = null, latMax = null, lonMin = null, lonMax = null;
+    for (Entry<Integer, SolrDocument> entry : docs.entrySet()) {
+      SolrDocument doc = entry.getValue();
+      String latlon = (String)doc.getFieldValue(this.latlonField);
+      if (latlon != null) {
+        String[] latlonSplit = latlon.split(",");
+        float lat = Float.parseFloat(latlonSplit[0]);
+        float lon = Float.parseFloat(latlonSplit[1]);
+        latMin = latMin == null ? lat : Math.min(latMin, lat);
+        latMax = latMax == null ? lat : Math.max(latMax, lat);
+        lonMin = lonMin == null ? lon : Math.min(lonMin, lon);
+        lonMax = lonMax == null ? lon : Math.max(lonMax, lon);
+      }
+    }
+    try {
+      LatLng latlonCenter = new FloatLatLng(
+          (latMin + latMax) / 2, 
+          (lonMin + lonMax) / 2
+      );
+      cluster.put("center", latlonCenter);
+    }
+    catch(Exception e) {
+    }
+  }
+ 
 
   private void mergeCluster(SolrDocument cluster, SolrDocument otherCluster) {
     HashMap<Integer, SolrDocument> otherDocs = (HashMap<Integer, SolrDocument>) otherCluster.getFieldValue("docs");
     for (Entry<Integer, SolrDocument> otherEntry : otherDocs.entrySet()) {
       addCluster(cluster, otherEntry.getValue(), otherEntry.getKey());
     }
+    // Uddate center.
+    LatLng center = (LatLng)cluster.get("center");
+    LatLng otherCenter = (LatLng)otherCluster.get("center");
+    LatLng newCenter = center.calculateMidpoint(otherCenter);
+    cluster.setField("center", newCenter);
   }
 
   private boolean shouldCluster(SolrDocument cluster, SolrDocument otherCluster) {
-    // TODO Auto-generated method stub
-    return true;
+    LatLng latlng = (LatLng)cluster.get("center");
+    LatLng latlngOther = (LatLng)otherCluster.get("center");
+    // Calculate distance in meters.
+    double distance = latlng.arcDistance(latlngOther, DistanceUnits.KILOMETERS);
+    log.info("distance: " + distance);
+    return distance < this.clusterDistance;
   }
 
   /**
