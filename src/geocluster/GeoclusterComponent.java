@@ -115,15 +115,13 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
       // Temp. store for clusters.
       int size = results.docList.size(); // will be less, but no way to calc in advance?
       Map<String, SolrDocument> clusterMap = new HashMap<String, SolrDocument>(size);
-      
+
+      // Add all points within the core geohash to a cluster.
       for (NamedList group : groups) {
         String geohashPrefix = (String)group.get("groupValue");
         log.info("Prefix: " + geohashPrefix);
         
-        // Add all points within the core geohash to a cluster.
-        
         SolrDocument cluster = null;
-
         DocSlice docList = (DocSlice)group.get("doclist");
         DocIterator iterator = docList.iterator();
         while (iterator.hasNext()) {
@@ -137,31 +135,31 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
           // Init cluster
           if (cluster == null) {
             cluster = initCluster(doc, docId, clusterMap, geohashPrefix, docList);
+            log.info("Parent: " + id + ", geohash: " + geohash + ", latlon: " + latlon); 
           }
           else {
             addCluster(cluster, doc, docId);
+            log.info("Child : " + id + ", geohash: " + geohash + ", latlon: " + latlon); 
           }
-          log.info("Doc: " + id + ", geohash: " + geohash + ", latlon: " + latlon); 
         }
-        
-        if (geohashPrefix != null) {
-          GeoHash hash = GeoHash.fromGeohashString(geohashPrefix);
-          GeoHash[] neighbors = hash.getAdjacent();
-          for (GeoHash neighbor : neighbors) {
-            String neighborHashString = neighbor.toString();
-            if (clusterMap.containsKey(neighborHashString)) {
-              SolrDocument otherCluster = clusterMap.get(neighborHashString);
-              if (shouldCluster(cluster, otherCluster)) {
-                mergeCluster(cluster, otherCluster);
-              }
+      }
+      
+      // Compare neighbor overlaps.
+      for (Entry<String, SolrDocument> clusterEntry : clusterMap.entrySet()) {
+        String geohashPrefix = clusterEntry.getKey();
+        SolrDocument cluster = clusterEntry.getValue();
+        log.info("Cluster: key: " + geohashPrefix + ", value: " );
+        GeoHash hash = GeoHash.fromGeohashString(geohashPrefix);
+        GeoHash[] neighbors = hash.getAdjacent();
+        for (GeoHash neighbor : neighbors) {
+          String neighborHashString = neighbor.toString();
+          if (clusterMap.containsKey(neighborHashString)) {
+            SolrDocument otherCluster = clusterMap.get(neighborHashString);
+            if (shouldCluster(cluster, otherCluster)) {
+              mergeCluster(cluster, otherCluster);
             }
           }
         }
-       
-      }
-      
-      for (Entry<String, SolrDocument> cluster : clusterMap.entrySet()) {
-        log.info("Cluster: key: " + cluster.getKey() + ", value: " );
       }
     }
     /*
@@ -174,9 +172,9 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
   }
 
   private void mergeCluster(SolrDocument cluster, SolrDocument otherCluster) {
-    HashMap<Integer, SolrDocument> docs = (HashMap<Integer, SolrDocument>) otherCluster.getFieldValue("docs");
-    for (Entry<Integer, SolrDocument> entry : docs.entrySet()) {
-      addCluster(cluster, entry.getValue(), entry.getKey());
+    HashMap<Integer, SolrDocument> otherDocs = (HashMap<Integer, SolrDocument>) otherCluster.getFieldValue("docs");
+    for (Entry<Integer, SolrDocument> otherEntry : otherDocs.entrySet()) {
+      addCluster(cluster, otherEntry.getValue(), otherEntry.getKey());
     }
   }
 
@@ -199,11 +197,6 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
 
   /**
    * Initialize a cluster.
-   * 
-   * @param clusterMap
-   * @param geohashPrefix
-   * @param docList
-   * @return 
    */
   private SolrDocument initCluster(SolrDocument doc, Integer docId, Map<String, SolrDocument> clusterMap, String geohashPrefix, DocSlice docList) {
     HashMap<Integer, SolrDocument> docs = new HashMap<Integer, SolrDocument>();
