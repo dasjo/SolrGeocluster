@@ -217,6 +217,14 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
         }
       }
       
+      for (Entry<String, SolrDocument> clusterEntry : clusterMap.entrySet()) {
+        String geohashPrefix = clusterEntry.getKey();
+        if (geohashPrefix == null) {
+          continue;
+        }
+        SolrDocument cluster = clusterEntry.getValue();
+        this.finishCluster(cluster);
+      }
       
       // Remove normal grouped docs from response.
       rb.rsp.getValues().remove(rb.rsp.getValues().indexOf("grouped", 0));
@@ -226,6 +234,16 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
     }
         
     log.info("clustering finished");
+  }
+  
+
+  private void finishCluster(SolrDocument cluster) {
+    // Replace center with latlng string.
+    LatLng center = (LatLng)cluster.get("center");
+    cluster.setField("center", center.getLat() + "," + center.getLng());
+    // Replace docs with ids only.
+    HashMap<Integer, SolrDocument> docs = (HashMap<Integer, SolrDocument>)cluster.getFieldValue("docs");
+    cluster.setField("docs", docs.keySet());
   }
 
   private void updateCluster(SolrDocument cluster) {
