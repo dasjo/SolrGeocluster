@@ -19,12 +19,13 @@ package geocluster;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 
 import org.apache.lucene.spatial.geometry.DistanceUnits;
-import org.apache.lucene.spatial.geometry.FixedLatLng;
 import org.apache.lucene.spatial.geometry.FloatLatLng;
 import org.apache.lucene.spatial.geometry.LatLng;
 import org.apache.solr.common.SolrDocument;
@@ -165,7 +166,7 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
       Map<String, SolrDocument> clusterMap = clusterByHashes(docIds, groups);
       
       // Compare neighbor overlaps.
-      // neighborCheck(clusterMap);
+      neighborCheck(clusterMap);
       
       // Finalize cluster data.
       finalizeClusters(clusterMap);
@@ -217,7 +218,18 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
   }
 
   private void neighborCheck(Map<String, SolrDocument> clusterMap) {
-    for (Entry<String, SolrDocument> clusterEntry : clusterMap.entrySet()) {
+    Iterator<Entry<String, SolrDocument>> i = clusterMap.entrySet().iterator();
+    /* 
+     * TODO: we are always merging the current cluster into the other one
+     * if those overlap. this is for coding convenience as we can use the
+     * iterator.remove method this way.
+     * 
+     * actually we should check where in which geohash quadrant the new
+     * super cluster will remain and choose which to delete upon that.
+     */
+    loop:
+    while (i.hasNext()) {
+      Entry<String, SolrDocument> clusterEntry = i.next();
       String geohashPrefix = clusterEntry.getKey();
       if (geohashPrefix == null) {
         continue;
@@ -225,14 +237,19 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
       SolrDocument cluster = clusterEntry.getValue();
       log.info("Cluster: key: " + geohashPrefix + ", value: " );
       GeoHash hash = GeoHash.fromGeohashString(geohashPrefix);
+      
+      // Get all neighbors to check for.
       GeoHash[] neighbors = GeohashHelper.getAdjacecentNorthWest(hash);
       for (GeoHash neighbor : neighbors) {
         String neighborHashString = neighbor.toBase32();
         if (clusterMap.containsKey(neighborHashString)) {
           SolrDocument otherCluster = clusterMap.get(neighborHashString);
-          if (shouldCluster(cluster, otherCluster)) {
-            mergeCluster(cluster, otherCluster);
-            clusterMap.remove(otherCluster);
+          
+          // For every neighbor we check if they overlap and if so we merge.
+          if (shouldCluster(otherCluster, cluster)) {
+            mergeCluster(otherCluster, cluster);
+            i.remove();
+            continue loop;  // This cluster is gone, remove and continue.
           }
         }
       }
@@ -340,8 +357,14 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
    * @param sreq
    * @return set of field names to load
    */
-  protected Set<String> getFieldsToLoad(SolrQueryRequest sreq){
-    return null;
+  protected Set<String> getFieldsToLoad(SolrQueryRequest sreq) {
+    // TODO: still complete documents seem to be loaded.
+    Set<String> fields = new HashSet<String>();
+    fields.add(this.groupField);
+    fields.add(this.geohashField);
+    fields.add(this.idField);
+    fields.add(this.latlonField);
+    return fields;
   }
 
   protected SolrDocumentList getSolrDocumentList(DocList docList, SolrQueryRequest sreq,
@@ -349,7 +372,6 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
     return SolrPluginUtils.docListToSolrDocumentList(
         docList, sreq.getSearcher(), getFieldsToLoad(sreq), docIds);
   }
-  
 
   @Override
   public void modifyRequest(ResponseBuilder rb, SearchComponent who, ShardRequest sreq) {
