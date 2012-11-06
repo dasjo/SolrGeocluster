@@ -169,13 +169,13 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
       neighborCheck(clusterMap);
       
       // Finalize cluster data.
-      finalizeClusters(clusterMap);
+      SolrDocumentList resultClusters = finalizeClusters(clusterMap);
       
       // Remove normal grouped docs from response.
       rb.rsp.getValues().remove(rb.rsp.getValues().indexOf("grouped", 0));
       
       // Add our custom cluster map instead.
-      rb.rsp.add("clusters", clusterMap);
+      rb.rsp.add("clusters", resultClusters);
     }
         
     log.info("clustering finished");
@@ -256,7 +256,8 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
     }
   }
 
-  private void finalizeClusters(Map<String, SolrDocument> clusterMap) {
+  private SolrDocumentList finalizeClusters(Map<String, SolrDocument> clusterMap) {
+    SolrDocumentList resultClusters = new SolrDocumentList();
     for (Entry<String, SolrDocument> clusterEntry : clusterMap.entrySet()) {
       String geohashPrefix = clusterEntry.getKey();
       if (geohashPrefix == null) {
@@ -264,7 +265,9 @@ public class GeoclusterComponent extends SearchComponent implements SolrCoreAwar
       }
       SolrDocument cluster = clusterEntry.getValue();
       this.finishCluster(cluster);
+      resultClusters.add(cluster);
     }
+    return resultClusters;
   }
 
   /**
